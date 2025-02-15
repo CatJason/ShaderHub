@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
 
         // 设置 OpenGL 渲染器为海洋纹理渲染器
         glSurfaceView.setEGLContextClientVersion(2) // 设置 OpenGL ES 版本
-        glSurfaceView.setRenderer(FogCubeTextureRenderer()) // 设置自定义渲染器
+        glSurfaceView.setRenderer(OceanTextureRenderer()) // 设置自定义渲染器
 
         setContent {
             ShaderHubTheme {
