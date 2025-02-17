@@ -14,22 +14,45 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.jason.shaderhub.ui.theme.ShaderHubTheme
 import android.opengl.GLSurfaceView
+import android.view.GestureDetector
+import android.view.MotionEvent
 import androidx.compose.ui.viewinterop.AndroidView
 
 class MainActivity : ComponentActivity() {
+    private lateinit var glSurfaceView: GLSurfaceView
+    private lateinit var gestureDetector: GestureDetector
+    private lateinit var boxRenderer: BoxRenderer
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // 创建 GLSurfaceView 实例
-        val glSurfaceView = GLSurfaceView(this)
+        glSurfaceView = GLSurfaceView(this)
         glSurfaceView.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
 
+        // 创建 BoxRenderer 实例
+        boxRenderer = BoxRenderer()
+
         // 设置 OpenGL 渲染器为海洋纹理渲染器
         glSurfaceView.setEGLContextClientVersion(2) // 设置 OpenGL ES 版本
-        glSurfaceView.setRenderer(OceanTextureRenderer()) // 设置自定义渲染器
+        glSurfaceView.setRenderer(boxRenderer) // 设置自定义渲染器
+
+        // 创建 GestureDetector 以监听手势
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onScroll(
+                e1: MotionEvent?,
+                e2: MotionEvent,
+                distanceX: Float,
+                distanceY: Float
+            ): Boolean {
+                // 调用渲染器的 rotate 方法
+                boxRenderer.rotate(distanceX, distanceY)
+                return true
+            }
+        })
 
         setContent {
             ShaderHubTheme {
@@ -38,25 +61,16 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     // 嵌套 GLSurfaceView
-                    AndroidView({ glSurfaceView })
+                    AndroidView({ glSurfaceView }) { view ->
+                        // 处理触摸事件并传递给 GestureDetector
+                        view.setOnTouchListener { v, event ->
+                            gestureDetector.onTouchEvent(event)
+                            true
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    ShaderHubTheme {
-        Greeting("Android")
-    }
-}
