@@ -184,11 +184,12 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
         val spacing = screenWidth * 1f / 10f
         val startX = spacing  // 左边距
 
+        // 生成顶点数据
         val vertices = FloatArray(CARD_COUNT * 8).apply {
             for (i in 0 until CARD_COUNT) {
                 val left = startX + i * (cardWidth + spacing)
                 val right = left + cardWidth
-                val top = (screenHeight - cardHeight) / 2f
+                val top = (screenHeight - cardHeight) / 2f // 垂直居中
                 val bottom = top + cardHeight
 
                 val offset = i * 8
@@ -238,9 +239,11 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun getMaxTranslation(): Float {
+        if (screenWidth == 0) return 0f
         val cardWidth = screenWidth * 4f / 5f
         val spacing = screenWidth * 1f / 10f
-        return (CARD_COUNT * (cardWidth + spacing) - spacing - screenWidth).coerceAtLeast(0f)
+        val totalWidth = CARD_COUNT * cardWidth + (CARD_COUNT + 1) * spacing
+        return (totalWidth - screenWidth).coerceAtLeast(0f)
     }
 
     private fun initShaders() {
