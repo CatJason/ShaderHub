@@ -1,5 +1,6 @@
 package com.jason.shaderhub
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import android.widget.FrameLayout
 import android.view.ViewGroup
@@ -8,10 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import com.jason.shaderhub.ui.theme.ShaderHubTheme
 import android.opengl.GLSurfaceView
 import android.view.GestureDetector
@@ -21,8 +19,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 class MainActivity : ComponentActivity() {
     private lateinit var glSurfaceView: GLSurfaceView
     private lateinit var gestureDetector: GestureDetector
-    private lateinit var boxRenderer: BoxRenderer
+    private lateinit var mRenderer: IRender
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -34,11 +33,11 @@ class MainActivity : ComponentActivity() {
         )
 
         // 创建 BoxRenderer 实例
-        boxRenderer = BoxRenderer()
+        mRenderer = GradientTriangleRenderer()
 
         // 设置 OpenGL 渲染器为海洋纹理渲染器
         glSurfaceView.setEGLContextClientVersion(2) // 设置 OpenGL ES 版本
-        glSurfaceView.setRenderer(boxRenderer) // 设置自定义渲染器
+        glSurfaceView.setRenderer(mRenderer) // 设置自定义渲染器
 
         // 创建 GestureDetector 以监听手势
         gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -49,7 +48,7 @@ class MainActivity : ComponentActivity() {
                 distanceY: Float
             ): Boolean {
                 // 调用渲染器的 rotate 方法
-                boxRenderer.rotate(distanceX, distanceY)
+                mRenderer.rotate(distanceX, - distanceY)
                 return true
             }
         })
@@ -63,7 +62,7 @@ class MainActivity : ComponentActivity() {
                     // 嵌套 GLSurfaceView
                     AndroidView({ glSurfaceView }) { view ->
                         // 处理触摸事件并传递给 GestureDetector
-                        view.setOnTouchListener { v, event ->
+                        view.setOnTouchListener { _, event ->
                             gestureDetector.onTouchEvent(event)
                             true
                         }
