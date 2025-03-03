@@ -43,6 +43,13 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var lastFrameTime = System.currentTimeMillis() // 上一帧时间
     private var starAlpha = 0.5f // 星星纹理的透明度
 
+    // 光照相关变量
+    private var lightPositionHandle: Int = 0
+    private var lightPosition = floatArrayOf(0f, 0f) // 光源位置
+
+    private var isPaused = false // 是否暂停
+    private var pauseStartTime = 0L // 暂停开始时间
+
     // 屏幕参数
     private var screenWidth = 0
     private var screenHeight = 0
@@ -80,6 +87,7 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
         uniform sampler2D uStarTexture; // 星星纹理
         uniform sampler2D uOverlayTexture; // 叠加色纹理
         uniform float uStarAlpha; // 星星纹理的透明度
+        uniform vec2 uLightPosition; // 光源位置
 
         vec4 colorDodge(vec4 base, vec4 blend) {
             return base / (1.0 - blend);
@@ -94,7 +102,15 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
             vec4 mixedColor = mix(cardColor, starColor, starColor.a * uStarAlpha);
 
             // 应用 Color Dodge 混合
-            gl_FragColor = colorDodge(mixedColor, overlayColor);
+            vec4 finalColor = colorDodge(mixedColor, overlayColor);
+
+            // 计算光照效果
+            vec2 lightDir = uLightPosition - vTexCoord;
+            float lightIntensity = 1.0 - length(lightDir); // 光源强度基于距离
+            lightIntensity = clamp(lightIntensity, 0.0, 1.0);
+
+            // 应用光照效果
+            gl_FragColor = finalColor * lightIntensity;
         }
     """.trimIndent()
 
@@ -105,6 +121,7 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
         loadTextures(context)
         loadStarGif(context) // 加载 GIF 文件并解析为帧
         loadOverlayTextures(context) // 加载叠加色纹理
+        lightPositionHandle = GLES20.glGetUniformLocation(mProgram, "uLightPosition")
     }
 
     override fun onSurfaceChanged(gl: GL10, width: Int, height: Int) {
@@ -127,6 +144,26 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
             lastFrameTime = currentTime
         }
 
+        // 更新光照位置
+        if (!isPaused) {
+            val lightSpeed = 0.01f
+            lightPosition[0] = (lightPosition[0] + lightSpeed).coerceIn(-1.4f, 1.4f) // 扩展到 [0, 1.5]
+            lightPosition[1] = (lightPosition[1] + lightSpeed).coerceIn(-1.4f, 1.4f) // 扩展到 [0, 1.5]
+
+            // 如果光源到达终点，开始暂停
+            if (lightPosition[0] >= 1.4f && lightPosition[1] >= 1.4f) {
+                isPaused = true
+                pauseStartTime = currentTime
+            }
+        } else {
+            // 检查是否暂停结束
+            if (currentTime - pauseStartTime >= 1L) { // 暂停 1 秒
+                isPaused = false
+                lightPosition [ 0 ] = - 1.4f // 重置光源位置到起点
+                lightPosition [ 1 ] = - 1.4f
+            }
+        }
+
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(mProgram)
 
@@ -136,6 +173,9 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         val matrixHandle = GLES20.glGetUniformLocation(mProgram, "uMVPMatrix")
         GLES20.glUniformMatrix4fv(matrixHandle, 1, false, mvpMatrix, 0)
+
+        // 传递光源位置到着色器
+        GLES20.glUniform2f(lightPositionHandle, lightPosition[0], lightPosition[1])
 
         drawCards()
     }
@@ -233,7 +273,14 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
             GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
 
             textureBuffer.position(0)
-            GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 0, textureBuffer)
+            GLES20.glVertexAttribPointer(
+                texCoordHandle,
+                2,
+                GLES20.GL_FLOAT,
+                false,
+                0,
+                textureBuffer
+            )
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         }
@@ -318,7 +365,8 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     private fun loadTextures(context: Context) {
         for (i in 0 until CARD_COUNT) {
-            val resourceId = context.resources.getIdentifier("pic$i", "drawable", context.packageName)
+            val resourceId =
+                context.resources.getIdentifier("pic$i", "drawable", context.packageName)
             textures[i] = loadTexture(context, resourceId)
         }
     }
@@ -333,11 +381,20 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
             // 翻转图片的 Y 坐标
             val matrix = android.graphics.Matrix().apply { postScale(1f, -1f) }
-            val flippedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            val flippedBitmap =
+                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle[0])
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(
+                GLES20.GL_TEXTURE_2D,
+                GLES20.GL_TEXTURE_MIN_FILTER,
+                GLES20.GL_LINEAR
+            )
+            GLES20.glTexParameteri(
+                GLES20.GL_TEXTURE_2D,
+                GLES20.GL_TEXTURE_MAG_FILTER,
+                GLES20.GL_LINEAR
+            )
             GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, flippedBitmap, 0)
             flippedBitmap.recycle()
             bitmap.recycle()
@@ -348,7 +405,8 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     private fun loadOverlayTextures(context: Context) {
         for (i in 0 until CARD_COUNT) {
-            val resourceId = context.resources.getIdentifier("pic$i", "drawable", context.packageName)
+            val resourceId =
+                context.resources.getIdentifier("pic$i", "drawable", context.packageName)
             overlayTextures[i] = loadTexture(context, resourceId)
         }
     }
@@ -370,6 +428,7 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
             movie.draw(canvas, 0f, 0f)
 
             val textureHandle = IntArray(1)
+
             GLES20.glGenTextures(1, textureHandle, 0)
 
             if (textureHandle[0] != 0) {
