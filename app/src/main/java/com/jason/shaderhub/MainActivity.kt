@@ -2,55 +2,37 @@ package com.jason.shaderhub
 
 import android.annotation.SuppressLint
 import android.os.Bundle
-import android.widget.FrameLayout
-import android.view.ViewGroup
+import android.opengl.GLSurfaceView
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import com.jason.shaderhub.ui.theme.ShaderHubTheme
-import android.opengl.GLSurfaceView
-import android.view.GestureDetector
-import android.view.MotionEvent
 import androidx.compose.ui.viewinterop.AndroidView
+import com.jason.shaderhub.CardRenderer.Companion.CARD_COUNT
+import com.jason.shaderhub.ui.theme.ShaderHubTheme
 
-// MainActivity.kt
 class MainActivity : ComponentActivity() {
     private lateinit var glSurfaceView: GLSurfaceView
-    private lateinit var gestureDetector: GestureDetector
     private lateinit var renderer: CardRenderer
-    private var translationX = 0f
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 初始化渲染器
-        renderer = CardRenderer()
+        // 初始化带物理效果的CardRenderer
+        renderer = CardRenderer(this).apply {
+            // 可在此配置卡片数量等参数
+            CARD_COUNT = 5
+        }
 
-        // 配置GLSurfaceView
+        // 配置高性能GLSurfaceView
         glSurfaceView = GLSurfaceView(this).apply {
             setEGLContextClientVersion(2)
             setRenderer(renderer)
-            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY // 启用按需渲染
+            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY // 启用持续渲染
         }
-
-        // 手势处理
-        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onScroll(
-                e1: MotionEvent?,
-                e2: MotionEvent,
-                distanceX: Float,
-                distanceY: Float
-            ): Boolean {
-                // 更新水平平移量
-                translationX -= distanceX
-                renderer.updateTranslation(translationX)
-                requestRender()
-                return true
-            }
-        })
 
         setContent {
             ShaderHubTheme {
@@ -58,8 +40,9 @@ class MainActivity : ComponentActivity() {
                     AndroidView(
                         factory = { glSurfaceView },
                         update = { view ->
+                            // 触摸事件处理绑定
                             view.setOnTouchListener { _, event ->
-                                gestureDetector.onTouchEvent(event)
+                                handleTouchEvent(event)
                                 true
                             }
                         }
@@ -69,8 +52,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestRender() {
-        glSurfaceView.requestRender()
+    private fun handleTouchEvent(event: MotionEvent): Boolean {
+        // 将事件传递给渲染器的触摸处理器
+        renderer.handleTouchEvent(event)
+        return true
     }
 
     override fun onPause() {

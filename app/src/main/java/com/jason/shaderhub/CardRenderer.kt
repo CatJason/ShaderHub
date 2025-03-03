@@ -1,27 +1,52 @@
 package com.jason.shaderhub
 
+import android.content.Context
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.graphics.Color
 import android.opengl.Matrix
+import android.view.MotionEvent
+import android.view.VelocityTracker
+import android.view.ViewConfiguration
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
 
-class CardRenderer : GLSurfaceView.Renderer {
+class CardRenderer(context: Context) : GLSurfaceView.Renderer {
     companion object {
         var CARD_COUNT = 5
+        private const val SCROLL_FRICTION = 0.95f
+        private const val EDGE_SPRING = 0.3f
+        private const val TOUCH_SLOP = 0.5f
     }
 
+    // OpenGL 相关变量
     private lateinit var vertexBuffer: FloatBuffer
     private lateinit var colorBuffer: FloatBuffer
     private var mProgram = 0
     private val projectionMatrix = FloatArray(16)
+    private val modelMatrix = FloatArray(16)
+    private val mvpMatrix = FloatArray(16)
+
+    // 屏幕参数
     private var screenWidth = 0
     private var screenHeight = 0
-    private var translationX = 0f // 横向平移量
+    private val density = context.resources.displayMetrics.density
+
+    // 滚动参数
+    private var translationX = 0f
+    private var currentVelocity = 0f
+    private var lastTouchX = 0f
+    private var isDragging = false
+
+    // 物理滚动工具
+    private val minFlingVelocity = ViewConfiguration.get(context).scaledMinimumFlingVelocity
+    private val maxFlingVelocity = ViewConfiguration.get(context).scaledMaximumFlingVelocity
+    private val velocityTracker = VelocityTracker.obtain()
+    private val scroller = android.widget.Scroller(context)
 
     // 顶点着色器
     private val vertexShaderCode = """
@@ -44,33 +69,10 @@ class CardRenderer : GLSurfaceView.Renderer {
         }
     """.trimIndent()
 
-    // 速度因子，用于控制滑动速度
-    private val speedFactor = 0.5f
-
-    // 当前滑动速度
-    private var currentVelocity = 0f
-
-    // 最大滑动速度
-    private val maxVelocity = 30f
-
-    // 更新平移量
-    fun updateTranslation(deltaX: Float) {
-        // 根据速度因子调整滑动速度
-        currentVelocity = (deltaX * speedFactor).coerceIn(-maxVelocity, maxVelocity)
-        translationX = (translationX - currentVelocity).coerceIn(0f, getMaxTranslation())
-    }
-
-    private fun getMaxTranslation(): Float {
-        if (screenWidth == 0) return 0f
-        val cardWidth = screenWidth * 4f / 5f
-        val spacing = screenWidth * 1f / 10f
-        val totalWidth = CARD_COUNT * cardWidth + (CARD_COUNT - 1) * spacing
-        return (totalWidth - screenWidth).coerceAtLeast(0f)
-    }
-
     override fun onSurfaceCreated(gl: GL10, config: EGLConfig) {
-        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+        GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
         initShaders()
+        Matrix.setIdentityM(modelMatrix, 0)
     }
 
     override fun onSurfaceChanged(gl: GL10, width: Int, height: Int) {
@@ -83,24 +85,79 @@ class CardRenderer : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10) {
+        updatePhysics()
+        applyEdgeSpring()
+
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(mProgram)
 
-        // 创建模型矩阵并应用平移
-        val modelMatrix = FloatArray(16).apply {
-            Matrix.setIdentityM(this, 0)
-            Matrix.translateM(this, 0, -translationX, 0f, 0f)
-        }
+        Matrix.setIdentityM(modelMatrix, 0)
+        Matrix.translateM(modelMatrix, 0, -translationX, 0f, 0f)
+        Matrix.multiplyMM(mvpMatrix, 0, projectionMatrix, 0, modelMatrix, 0)
 
-        // 组合矩阵
-        val mvpMatrix = FloatArray(16).apply {
-            Matrix.multiplyMM(this, 0, projectionMatrix, 0, modelMatrix, 0)
-        }
-
-        // 传递矩阵到Shader
         val matrixHandle = GLES20.glGetUniformLocation(mProgram, "uMVPMatrix")
         GLES20.glUniformMatrix4fv(matrixHandle, 1, false, mvpMatrix, 0)
 
+        drawCards()
+    }
+
+    fun handleTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                scroller.forceFinished(true)
+                lastTouchX = event.x
+                velocityTracker.clear()
+                velocityTracker.addMovement(event)
+                isDragging = true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val deltaX = (event.x - lastTouchX) * TOUCH_SLOP
+                translationX -= deltaX * density
+                translationX = translationX.coerceIn(0f, getMaxTranslation())
+                lastTouchX = event.x
+                velocityTracker.addMovement(event)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isDragging = false
+                velocityTracker.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
+                val velocityX = velocityTracker.xVelocity
+
+                if (abs(velocityX) > minFlingVelocity) {
+                    scroller.fling(
+                        translationX.toInt(), 0,
+                        (-velocityX).toInt(), 0,
+                        0, getMaxTranslation().toInt(),
+                        0, 0
+                    )
+                }
+                velocityTracker.clear()
+            }
+        }
+        return true
+    }
+
+    private fun updatePhysics() {
+        if (!isDragging && !scroller.isFinished) {
+            if (scroller.computeScrollOffset()) {
+                translationX = scroller.currX.toFloat()
+            } else {
+                currentVelocity *= SCROLL_FRICTION
+                translationX += currentVelocity * density
+                translationX = translationX.coerceIn(0f, getMaxTranslation())
+                if (abs(currentVelocity) < 0.5f) currentVelocity = 0f
+            }
+        }
+    }
+
+    private fun applyEdgeSpring() {
+        val max = getMaxTranslation()
+        when {
+            translationX < 0 -> translationX -= translationX * EDGE_SPRING
+            translationX > max -> translationX -= (translationX - max) * EDGE_SPRING
+        }
+    }
+
+    private fun drawCards() {
         val positionHandle = GLES20.glGetAttribLocation(mProgram, "vPosition")
         val colorHandle = GLES20.glGetAttribLocation(mProgram, "aColor")
 
@@ -122,36 +179,27 @@ class CardRenderer : GLSurfaceView.Renderer {
     }
 
     private fun generateVertexData() {
-        // 卡片宽度为屏幕宽度的 4/5
         val cardWidth = screenWidth * 4f / 5f
-
-        // 卡片高度为宽度的 16/9
         val cardHeight = cardWidth * 16f / 9f
-
-        // 卡片之间的间距为屏幕宽度的 1/10
         val spacing = screenWidth * 1f / 10f
+        val startX = spacing  // 左边距
 
-        // 第一张卡片距离左边的间距为屏幕宽度的 1/10
-        val startX = spacing
-
-        // 生成顶点数据
         val vertices = FloatArray(CARD_COUNT * 8).apply {
             for (i in 0 until CARD_COUNT) {
                 val left = startX + i * (cardWidth + spacing)
                 val right = left + cardWidth
-                val top = (screenHeight - cardHeight) / 2f // 垂直居中
+                val top = (screenHeight - cardHeight) / 2f
                 val bottom = top + cardHeight
 
                 val offset = i * 8
-                // 顶点顺序：左上 → 左下 → 右上 → 右下
-                this[offset] = left
-                this[offset + 1] = top
-                this[offset + 2] = left
-                this[offset + 3] = bottom
-                this[offset + 4] = right
-                this[offset + 5] = top
-                this[offset + 6] = right
-                this[offset + 7] = bottom
+                this[offset] = left       // 左上x
+                this[offset + 1] = top    // 左上y
+                this[offset + 2] = left   // 左下x
+                this[offset + 3] = bottom // 左下y
+                this[offset + 4] = right  // 右上x
+                this[offset + 5] = top    // 右上y
+                this[offset + 6] = right // 右下x
+                this[offset + 7] = bottom // 右下y
             }
         }
 
@@ -166,7 +214,7 @@ class CardRenderer : GLSurfaceView.Renderer {
         val colors = FloatArray(CARD_COUNT * 16).apply {
             for (i in 0 until CARD_COUNT) {
                 val hue = i * 360f / CARD_COUNT
-                val color = Color.HSVToColor(floatArrayOf(hue, 1f, 1f))
+                val color = Color.HSVToColor(floatArrayOf(hue, 0.8f, 0.8f))
 
                 val red = Color.red(color) / 255f
                 val green = Color.green(color) / 255f
@@ -187,6 +235,12 @@ class CardRenderer : GLSurfaceView.Renderer {
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
             .apply { put(colors).position(0) }
+    }
+
+    private fun getMaxTranslation(): Float {
+        val cardWidth = screenWidth * 4f / 5f
+        val spacing = screenWidth * 1f / 10f
+        return (CARD_COUNT * (cardWidth + spacing) - spacing - screenWidth).coerceAtLeast(0f)
     }
 
     private fun initShaders() {
