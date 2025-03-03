@@ -1,13 +1,18 @@
 package com.jason.shaderhub
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Movie
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
-import android.graphics.Color
+import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
+import android.widget.Toast
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -15,7 +20,7 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
 
-class CardRenderer(context: Context) : GLSurfaceView.Renderer {
+class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
     companion object {
         var CARD_COUNT = 5
         private const val SCROLL_FRICTION = 0.95f
@@ -25,11 +30,17 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // OpenGL 相关变量
     private lateinit var vertexBuffer: FloatBuffer
-    private lateinit var colorBuffer: FloatBuffer
+    private lateinit var textureBuffer: FloatBuffer
     private var mProgram = 0
     private val projectionMatrix = FloatArray(16)
     private val modelMatrix = FloatArray(16)
     private val mvpMatrix = FloatArray(16)
+    private val textures = IntArray(CARD_COUNT)
+    private val starTextures = mutableListOf<Int>() // 存储所有帧的纹理
+    private var currentFrame = 0 // 当前帧索引
+    private var frameDelay = 100L // 帧间隔时间（毫秒）
+    private var lastFrameTime = System.currentTimeMillis() // 上一帧时间
+    private var starAlpha = 0.5f // 星星纹理的透明度
 
     // 屏幕参数
     private var screenWidth = 0
@@ -52,20 +63,25 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
     private val vertexShaderCode = """
         uniform mat4 uMVPMatrix;
         attribute vec2 vPosition;
-        attribute vec4 aColor;
-        varying vec4 vColor;
+        attribute vec2 aTexCoord;
+        varying vec2 vTexCoord;
         void main() {
             gl_Position = uMVPMatrix * vec4(vPosition, 0.0, 1.0);
-            vColor = aColor;
+            vTexCoord = aTexCoord;
         }
     """.trimIndent()
 
     // 片段着色器
     private val fragmentShaderCode = """
         precision mediump float;
-        varying vec4 vColor;
+        varying vec2 vTexCoord;
+        uniform sampler2D uTexture; // 卡片纹理
+        uniform sampler2D uStarTexture; // 星星纹理
+        uniform float uStarAlpha; // 星星纹理的透明度
         void main() {
-            gl_FragColor = vColor;
+            vec4 cardColor = texture2D(uTexture, vTexCoord); // 获取卡片颜色
+            vec4 starColor = texture2D(uStarTexture, vTexCoord); // 获取星星颜色
+            gl_FragColor = mix(cardColor, starColor, starColor.a * uStarAlpha); // 混合颜色
         }
     """.trimIndent()
 
@@ -73,6 +89,8 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
         initShaders()
         Matrix.setIdentityM(modelMatrix, 0)
+        loadTextures(context)
+        loadStarGif(context) // 加载 GIF 文件并解析为帧
     }
 
     override fun onSurfaceChanged(gl: GL10, width: Int, height: Int) {
@@ -81,12 +99,19 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES20.glViewport(0, 0, width, height)
         Matrix.orthoM(projectionMatrix, 0, 0f, width.toFloat(), 0f, height.toFloat(), -1f, 1f)
         generateVertexData()
-        generateColorData()
+        generateTextureData()
     }
 
     override fun onDrawFrame(gl: GL10) {
         updatePhysics()
         applyEdgeSpring()
+
+        // 更新当前帧
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastFrameTime >= frameDelay) {
+            currentFrame = (currentFrame + 1) % starTextures.size
+            lastFrameTime = currentTime
+        }
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(mProgram)
@@ -110,6 +135,7 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
                 velocityTracker.addMovement(event)
                 isDragging = true
             }
+
             MotionEvent.ACTION_MOVE -> {
                 val deltaX = (event.x - lastTouchX) * TOUCH_SLOP
                 translationX -= deltaX * density
@@ -117,6 +143,7 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
                 lastTouchX = event.x
                 velocityTracker.addMovement(event)
             }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 isDragging = false
                 velocityTracker.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
@@ -159,23 +186,47 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
 
     private fun drawCards() {
         val positionHandle = GLES20.glGetAttribLocation(mProgram, "vPosition")
-        val colorHandle = GLES20.glGetAttribLocation(mProgram, "aColor")
+        val texCoordHandle = GLES20.glGetAttribLocation(mProgram, "aTexCoord")
+        val textureHandle = GLES20.glGetUniformLocation(mProgram, "uTexture")
+        val starTextureHandle = GLES20.glGetUniformLocation(mProgram, "uStarTexture")
+        val starAlphaHandle = GLES20.glGetUniformLocation(mProgram, "uStarAlpha")
 
         GLES20.glEnableVertexAttribArray(positionHandle)
-        GLES20.glEnableVertexAttribArray(colorHandle)
+        GLES20.glEnableVertexAttribArray(texCoordHandle)
 
         repeat(CARD_COUNT) { i ->
+            // 绑定卡片纹理
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textures[i])
+            GLES20.glUniform1i(textureHandle, 0)
+
+            // 绑定当前帧的星星纹理
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, starTextures[currentFrame])
+            GLES20.glUniform1i(starTextureHandle, 1)
+
+            // 设置星星透明度
+            GLES20.glUniform1f(starAlphaHandle, starAlpha)
+
+            // 绘制卡片
             vertexBuffer.position(i * 8)
             GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
 
-            colorBuffer.position(i * 16)
-            GLES20.glVertexAttribPointer(colorHandle, 4, GLES20.GL_FLOAT, false, 0, colorBuffer)
+            textureBuffer.position(0)
+            GLES20.glVertexAttribPointer(
+                texCoordHandle,
+                2,
+                GLES20.GL_FLOAT,
+                false,
+                0,
+                textureBuffer
+            )
 
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         }
 
         GLES20.glDisableVertexAttribArray(positionHandle)
-        GLES20.glDisableVertexAttribArray(colorHandle)
+        GLES20.glDisableVertexAttribArray(texCoordHandle)
     }
 
     private fun generateVertexData() {
@@ -211,31 +262,19 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
             .apply { put(vertices).position(0) }
     }
 
-    private fun generateColorData() {
-        val colors = FloatArray(CARD_COUNT * 16).apply {
-            for (i in 0 until CARD_COUNT) {
-                val hue = i * 360f / CARD_COUNT
-                val color = Color.HSVToColor(floatArrayOf(hue, 0.8f, 0.8f))
+    private fun generateTextureData() {
+        val textureCoords = floatArrayOf(
+            0.0f, 0.0f,
+            0.0f, 1.0f,
+            1.0f, 0.0f,
+            1.0f, 1.0f
+        )
 
-                val red = Color.red(color) / 255f
-                val green = Color.green(color) / 255f
-                val blue = Color.blue(color) / 255f
-
-                for (j in 0 until 4) {
-                    val offset = i * 16 + j * 4
-                    this[offset] = red
-                    this[offset + 1] = green
-                    this[offset + 2] = blue
-                    this[offset + 3] = 1.0f
-                }
-            }
-        }
-
-        colorBuffer = ByteBuffer
-            .allocateDirect(colors.size * 4)
+        textureBuffer = ByteBuffer
+            .allocateDirect(textureCoords.size * 4)
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
-            .apply { put(colors).position(0) }
+            .apply { put(textureCoords).position(0) }
     }
 
     private fun getMaxTranslation(): Float {
@@ -262,5 +301,92 @@ class CardRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES20.glShaderSource(shader, shaderCode)
             GLES20.glCompileShader(shader)
         }
+    }
+
+    private fun loadTextures(context: Context) {
+        for (i in 0 until CARD_COUNT) {
+            val resourceId =
+                context.resources.getIdentifier("pic$i", "drawable", context.packageName)
+            textures[i] = loadTexture(context, resourceId)
+        }
+    }
+
+    private fun loadTexture(context: Context, resourceId: Int): Int {
+        val textureHandle = IntArray(1)
+        GLES20.glGenTextures(1, textureHandle, 0)
+
+        if (textureHandle[0] != 0) {
+            val options = BitmapFactory.Options().apply { inScaled = false }
+            val bitmap = BitmapFactory.decodeResource(context.resources, resourceId, options)
+
+            // 翻转图片的 Y 坐标
+            val matrix = android.graphics.Matrix().apply { postScale(1f, -1f) }
+            val flippedBitmap =
+                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle[0])
+            GLES20.glTexParameteri(
+                GLES20.GL_TEXTURE_2D,
+                GLES20.GL_TEXTURE_MIN_FILTER,
+                GLES20.GL_LINEAR
+            )
+            GLES20.glTexParameteri(
+                GLES20.GL_TEXTURE_2D,
+                GLES20.GL_TEXTURE_MAG_FILTER,
+                GLES20.GL_LINEAR
+            )
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, flippedBitmap, 0)
+            flippedBitmap.recycle()
+            bitmap.recycle()
+        }
+
+        return textureHandle[0]
+    }
+
+    private fun loadStarGif(context: Context) {
+        val inputStream: InputStream = context.assets.open("star.gif")
+        val movie = Movie.decodeStream(inputStream)
+        val frameCount = movie.duration() / 100 // 假设每帧持续 100 毫秒
+
+        (context as MainActivity).runOnUiThread {
+            // 显示帧数
+            Toast.makeText(context, "GIF 帧数: $frameCount", Toast.LENGTH_SHORT).show()
+        }
+
+        for (i in 0 until frameCount) {
+            val bitmap = Bitmap.createBitmap(movie.width(), movie.height(), Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+            movie.setTime(i * 100) // 设置当前帧时间
+            movie.draw(canvas, 0f, 0f)
+
+            val textureHandle = IntArray(1)
+            GLES20.glGenTextures(1, textureHandle, 0)
+
+            if (textureHandle[0] != 0) {
+                // 翻转图片的 Y 坐标
+                val matrix = android.graphics.Matrix().apply { postScale(1f, -1f) }
+                val flippedBitmap =
+                    Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+
+                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle[0])
+                GLES20.glTexParameteri(
+                    GLES20.GL_TEXTURE_2D,
+                    GLES20.GL_TEXTURE_MIN_FILTER,
+                    GLES20.GL_LINEAR
+                )
+                GLES20.glTexParameteri(
+                    GLES20.GL_TEXTURE_2D,
+                    GLES20.GL_TEXTURE_MAG_FILTER,
+                    GLES20.GL_LINEAR
+                )
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, flippedBitmap, 0)
+                flippedBitmap.recycle()
+                bitmap.recycle()
+            }
+
+            starTextures.add(textureHandle[0])
+        }
+
+        inputStream.close()
     }
 }
