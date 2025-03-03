@@ -7,7 +7,6 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.jason.shaderhub.ui.theme.ShaderHubTheme
@@ -16,30 +15,28 @@ import android.view.GestureDetector
 import android.view.MotionEvent
 import androidx.compose.ui.viewinterop.AndroidView
 
+// MainActivity.kt
 class MainActivity : ComponentActivity() {
     private lateinit var glSurfaceView: GLSurfaceView
     private lateinit var gestureDetector: GestureDetector
-    private lateinit var mRenderer: IRender
+    private lateinit var renderer: CardRenderer
+    private var translationX = 0f
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 创建 GLSurfaceView 实例
-        glSurfaceView = GLSurfaceView(this)
-        glSurfaceView.layoutParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
+        // 初始化渲染器
+        renderer = CardRenderer()
 
-        // 创建 BoxRenderer 实例
-        mRenderer = GradientTriangleRenderer()
+        // 配置GLSurfaceView
+        glSurfaceView = GLSurfaceView(this).apply {
+            setEGLContextClientVersion(2)
+            setRenderer(renderer)
+            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY // 启用按需渲染
+        }
 
-        // 设置 OpenGL 渲染器为海洋纹理渲染器
-        glSurfaceView.setEGLContextClientVersion(2) // 设置 OpenGL ES 版本
-        glSurfaceView.setRenderer(mRenderer) // 设置自定义渲染器
-
-        // 创建 GestureDetector 以监听手势
+        // 手势处理
         gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onScroll(
                 e1: MotionEvent?,
@@ -47,29 +44,42 @@ class MainActivity : ComponentActivity() {
                 distanceX: Float,
                 distanceY: Float
             ): Boolean {
-                // 调用渲染器的 rotate 方法
-                mRenderer.rotate(distanceX, - distanceY)
+                // 更新水平平移量
+                translationX -= distanceX
+                renderer.updateTranslation(translationX)
+                requestRender()
                 return true
             }
         })
 
         setContent {
             ShaderHubTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    // 嵌套 GLSurfaceView
-                    AndroidView({ glSurfaceView }) { view ->
-                        // 处理触摸事件并传递给 GestureDetector
-                        view.setOnTouchListener { _, event ->
-                            gestureDetector.onTouchEvent(event)
-                            true
+                Surface(Modifier.fillMaxSize()) {
+                    AndroidView(
+                        factory = { glSurfaceView },
+                        update = { view ->
+                            view.setOnTouchListener { _, event ->
+                                gestureDetector.onTouchEvent(event)
+                                true
+                            }
                         }
-                    }
+                    )
                 }
             }
         }
     }
-}
 
+    private fun requestRender() {
+        glSurfaceView.requestRender()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        glSurfaceView.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        glSurfaceView.onResume()
+    }
+}
