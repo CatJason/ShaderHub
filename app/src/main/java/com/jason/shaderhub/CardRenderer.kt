@@ -11,7 +11,7 @@ import android.opengl.Matrix
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.ViewConfiguration
-import android.widget.Toast
+// import android.widget.Toast
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -22,11 +22,19 @@ import kotlin.math.abs
 
 class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
     companion object {
-        var CARD_COUNT = 5
+        val CARD_COUNT = 20
         private const val SCROLL_FRICTION = 0.95f
         private const val EDGE_SPRING = 0.3f
         private const val TOUCH_SLOP = 0.5f
     }
+
+    private var brightnessHandle: Int = 0
+    private var brightness = 2.0f // 默认亮度
+
+    private var lightMaxIntensityHandle: Int = 0
+    private var lightDecayHandle: Int = 0
+    private var lightMaxIntensity = 0.5f // 光照强度最大值
+    private var lightDecay = 2.0f // 光照衰减系数
 
     // OpenGL 相关变量
     private lateinit var vertexBuffer: FloatBuffer
@@ -83,6 +91,8 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private val fragmentShaderCode = """
         precision mediump float;
         varying vec2 vTexCoord;
+        
+        uniform float uBrightness; // 亮度控制
         uniform sampler2D uTexture; // 卡片纹理
         uniform sampler2D uStarTexture; // 星星纹理
         uniform sampler2D uOverlayTexture; // 叠加色纹理
@@ -95,6 +105,8 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         void main() {
             vec4 cardColor = texture2D(uTexture, vTexCoord); // 获取卡片颜色
+            cardColor.rgb *= uBrightness; // 使用 uniform 变量控制亮度
+            
             vec4 starColor = texture2D(uStarTexture, vTexCoord); // 获取星星颜色
             vec4 overlayColor = texture2D(uOverlayTexture, vTexCoord); // 获取叠加色
 
@@ -106,8 +118,9 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
             // 计算光照效果
             vec2 lightDir = uLightPosition - vTexCoord;
-            float lightIntensity = 1.0 - length(lightDir); // 光源强度基于距离
-            lightIntensity = clamp(lightIntensity, 0.0, 1.0);
+            float lightIntensity = 1.0 - length(lightDir) / 1.5; // 光源强度基于距离
+            lightIntensity = clamp(lightIntensity, 0.0, 0.5); // 降低光照强度最大值
+            lightIntensity = pow(lightIntensity, 2.0); // 增加光照衰减
 
             // 应用光照效果
             gl_FragColor = finalColor * lightIntensity;
@@ -121,7 +134,11 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
         loadTextures(context)
         loadStarGif(context) // 加载 GIF 文件并解析为帧
         loadOverlayTextures(context) // 加载叠加色纹理
+
+        brightnessHandle = GLES20.glGetUniformLocation(mProgram, "uBrightness")
         lightPositionHandle = GLES20.glGetUniformLocation(mProgram, "uLightPosition")
+        lightMaxIntensityHandle = GLES20.glGetUniformLocation(mProgram, "uLightMaxIntensity")
+        lightDecayHandle = GLES20.glGetUniformLocation(mProgram, "uLightDecay")
     }
 
     override fun onSurfaceChanged(gl: GL10, width: Int, height: Int) {
@@ -165,7 +182,10 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
         }
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glUniform1f(brightnessHandle, brightness)
         GLES20.glUseProgram(mProgram)
+        GLES20.glUniform1f(lightMaxIntensityHandle, lightMaxIntensity)
+        GLES20.glUniform1f(lightDecayHandle, lightDecay)
 
         Matrix.setIdentityM(modelMatrix, 0)
         Matrix.translateM(modelMatrix, 0, -translationX, 0f, 0f)
@@ -416,10 +436,12 @@ class CardRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val movie = Movie.decodeStream(inputStream)
         val frameCount = movie.duration() / 100 // 假设每帧持续 100 毫秒
 
+        /*
         (context as MainActivity).runOnUiThread {
             // 显示帧数
             Toast.makeText(context, "GIF 帧数: $frameCount", Toast.LENGTH_SHORT).show()
         }
+         */
 
         for (i in 0 until frameCount) {
             val bitmap = Bitmap.createBitmap(movie.width(), movie.height(), Bitmap.Config.ARGB_8888)

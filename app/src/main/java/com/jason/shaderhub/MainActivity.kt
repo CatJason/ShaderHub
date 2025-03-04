@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import com.jason.shaderhub.CardRenderer.Companion.CARD_COUNT
 import com.jason.shaderhub.ui.theme.ShaderHubTheme
 
 class MainActivity : ComponentActivity() {
@@ -22,10 +21,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // 初始化带物理效果的CardRenderer
-        renderer = CardRenderer(this).apply {
-            // 可在此配置卡片数量等参数
-            CARD_COUNT = 5
-        }
+        renderer = CardRenderer(this)
 
         // 配置高性能GLSurfaceView
         glSurfaceView = GLSurfaceView(this).apply {
