@@ -17,6 +17,13 @@
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.ShaderHub">
+        </activity>
+
+        <activity
+            android:name=".SplashActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.ShaderHub">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
